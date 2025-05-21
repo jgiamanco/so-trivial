@@ -2,54 +2,30 @@ version: "3.8"
 
 services:
   client:
-    build:
-      context: ./client
-      dockerfile: Dockerfile
+    build: ./client
+    ports:
+      - "80:80"
     environment:
-      - NODE_ENV=production
-      - VITE_API_URL=${RAILWAY_PUBLIC_DOMAIN:-http://localhost:3000}
+      - VITE_API_URL=http://localhost:3000
     depends_on:
-      server:
-        condition: service_healthy
-    restart: unless-stopped
+      - server
 
   server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
+    build: ./server
+    ports:
+      - "3000:3000"
     environment:
-      - NODE_ENV=production
-      - MONGODB_URI=${MONGODB_URI}
-      - PORT=3000
-      - JWT_SECRET=${JWT_SECRET}
+      - MONGODB_URI=mongodb://mongo:27017/trivia
+      - JWT_SECRET=your-secret-key
     depends_on:
-      mongo:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "--no-verbose",
-          "--tries=1",
-          "--spider",
-          "http://localhost:3000/health",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      - mongo
 
   mongo:
     image: mongo:latest
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}
-      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:
