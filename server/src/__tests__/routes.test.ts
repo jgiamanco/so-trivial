@@ -1,7 +1,7 @@
 import request from "supertest";
 import mongoose from "mongoose";
 import { app } from "../index";
-import Quiz from "../models/Quiz";
+import { Quiz } from "../models/Quiz";
 import { Category } from "../models/Category";
 
 beforeAll(async () => {

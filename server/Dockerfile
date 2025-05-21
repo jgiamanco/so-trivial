@@ -1,16 +1,16 @@
-# Build stage
-FROM node:20-alpine as build
-
-# Install pnpm
-RUN npm install -g pnpm
+FROM node:20.11.1-alpine3.19
 
 WORKDIR /app
+
+# Install pnpm using corepack (included in Node.js 20+)
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Copy package files
 COPY package.json pnpm-lock.yaml ./
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile
+# Install dependencies with retry logic
+RUN --mount=type=cache,target=/root/.pnpm-store \
+    pnpm install --frozen-lockfile --network-timeout 100000
 
 # Copy source code
 COPY . .
@@ -18,26 +18,18 @@ COPY . .
 # Build the application
 RUN pnpm build
 
-# Production stage
-FROM node:20-alpine
-
-WORKDIR /app
-
-# Install pnpm
-RUN npm install -g pnpm
-
-# Copy package files
-COPY package.json pnpm-lock.yaml ./
-
-# Install production dependencies only
-RUN pnpm install --prod --frozen-lockfile
-
-# Copy built application from build stage
-COPY --from=build /app/dist ./dist
-
 # Set environment variables
 ENV NODE_ENV=production
 
 EXPOSE 3000
 
-CMD ["node", "dist/index.js"] 
+# Create startup script with proper line endings
+RUN printf '#!/bin/sh\n\
+echo "Waiting for MongoDB..."\n\
+sleep 5\n\
+echo "Seeding categories..."\n\
+node dist/scripts/seedCategories.js\n\
+echo "Starting server..."\n\
+node dist/index.js' > /app/start.sh && chmod +x /app/start.sh
+
+CMD ["/app/start.sh"] 

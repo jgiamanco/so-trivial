@@ -2,6 +2,56 @@ import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import axios from "axios";
 import { Category, Question } from "../types";
 
+// Configure axios defaults
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:3000";
+console.log("Using API URL:", API_URL); // Debug log
+
+axios.defaults.baseURL = API_URL;
+axios.defaults.timeout = 10000; // 10 seconds timeout
+axios.defaults.headers.common["Content-Type"] = "application/json";
+axios.defaults.withCredentials = false; // Disable credentials
+
+// Add request interceptor for debugging
+axios.interceptors.request.use(
+  (config) => {
+    console.log("Making request to:", config.url);
+    console.log("Request headers:", config.headers);
+    return config;
+  },
+  (error) => {
+    console.error("Request error:", error);
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor for better error handling
+axios.interceptors.response.use(
+  (response) => {
+    console.log("Response headers:", response.headers);
+    return response;
+  },
+  (error) => {
+    if (error.code === "ECONNABORTED") {
+      console.error("Request timeout");
+      return Promise.reject(new Error("Request timeout. Please try again."));
+    }
+    if (error.response) {
+      console.error("API Error:", error.response.data);
+      console.error("Response headers:", error.response.headers);
+      return Promise.reject(
+        new Error(error.response.data.error || "An error occurred")
+      );
+    }
+    if (error.request) {
+      console.error("Network Error:", error.request);
+      return Promise.reject(
+        new Error("Network error. Please check your connection.")
+      );
+    }
+    return Promise.reject(error);
+  }
+);
+
 export interface QuizState {
   categories: Category[];
   questions: Question[];
@@ -50,7 +100,7 @@ export const fetchCategories = createAsyncThunk(
   "quiz/fetchCategories",
   async () => {
     try {
-      const response = await axios.get("http://localhost:5000/api/categories");
+      const response = await axios.get("/api/categories");
       return response.data.trivia_categories;
     } catch (error) {
       if (axios.isAxiosError(error)) {
@@ -75,7 +125,7 @@ export const startQuiz = createAsyncThunk(
     sessionToken: string;
   }) => {
     try {
-      const response = await axios.post("http://localhost:5000/api/quiz", {
+      const response = await axios.post("/api/quiz", {
         category,
         difficulty,
         amount,
@@ -99,12 +149,9 @@ export const submitQuiz = createAsyncThunk(
   "quiz/submitQuiz",
   async ({ quizId, answers }: { quizId: string; answers: string[] }) => {
     try {
-      const response = await axios.post(
-        `http://localhost:5000/api/quiz/${quizId}/submit`,
-        {
-          answers,
-        }
-      );
+      const response = await axios.post(`/api/quiz/${quizId}/submit`, {
+        answers,
+      });
       return response.data;
     } catch (error) {
       if (axios.isAxiosError(error)) {

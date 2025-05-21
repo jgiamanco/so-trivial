@@ -1,82 +1,81 @@
 import express from "express";
 import cors from "cors";
-import axios from "axios";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
-import { Quiz } from "./models/Quiz";
-import {
-  QuizQuestion,
-  QuizResponse,
-  QuizSubmission,
-  QuizDocument,
-} from "./types/quiz";
-import { Category } from "./models/Category";
+import axios from "axios";
+import { Quiz } from "../src/models/Quiz";
+import { Category } from "../src/models/Category";
 
 dotenv.config();
 
-export const app = express();
-const port = process.env.PORT || 5000;
+const app = express();
 const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017/trivia";
 
-app.use(cors());
+// Configure CORS
+app.use(
+  cors({
+    origin: ["https://so-trivial.vercel.app", "http://localhost:3000"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
+  })
+);
+
+// Handle preflight requests
+app.options("*", cors());
+
 app.use(express.json());
 
-// Connect to MongoDB with retry logic
-const connectWithRetry = async () => {
-  const maxRetries = 5;
-  let retries = 0;
+// Add a middleware to log requests
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path}`);
+  console.log("Headers:", req.headers);
+  next();
+});
 
-  while (retries < maxRetries) {
-    try {
-      await mongoose.connect(mongoUri, {
-        serverSelectionTimeoutMS: 5000,
-        socketTimeoutMS: 45000,
-        connectTimeoutMS: 10000,
-        maxPoolSize: 10,
-        retryWrites: true,
-        w: "majority",
-      });
-      console.log("Connected to MongoDB");
-      return;
-    } catch (err) {
-      retries++;
-      console.error(
-        `MongoDB connection error (attempt ${retries}/${maxRetries}):`,
-        err
-      );
-      if (retries === maxRetries) {
-        console.error("Max retries reached. Could not connect to MongoDB");
-        process.exit(1);
-      }
-      // Wait for 5 seconds before retrying
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
-  }
-};
-
-connectWithRetry();
+// Connect to MongoDB
+mongoose
+  .connect(mongoUri)
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((err) => console.error("MongoDB connection error:", err));
 
 // Get categories
 app.get("/api/categories", async (req, res) => {
   try {
+    console.log("Attempting to fetch categories...");
+    console.log(
+      "MongoDB URI:",
+      process.env.MONGODB_URI ? "URI is set" : "URI is not set"
+    );
+
+    if (!mongoose.connection.readyState) {
+      console.log("MongoDB not connected, attempting to connect...");
+      await mongoose.connect(mongoUri);
+      console.log("MongoDB connected successfully");
+    }
+
     const categories = await Category.find().sort({ id: 1 });
+    console.log(`Found ${categories.length} categories`);
     res.json({ trivia_categories: categories });
   } catch (error) {
     console.error("Categories fetch error:", error);
-    res.status(500).json({ error: "Failed to fetch categories" });
+    res.status(500).json({
+      error: "Failed to fetch categories",
+      details: error instanceof Error ? error.message : "Unknown error",
+      stack:
+        process.env.NODE_ENV === "development"
+          ? error instanceof Error
+            ? error.stack
+            : undefined
+          : undefined,
+    });
   }
 });
 
 // Get questions and store in MongoDB
 app.post("/api/quiz", async (req, res) => {
   const { category, difficulty, amount, sessionToken } = req.body;
-
-  console.log("Quiz creation request:", {
-    category,
-    difficulty,
-    amount,
-    sessionToken,
-  });
 
   try {
     if (!sessionToken) {
@@ -93,18 +92,11 @@ app.post("/api/quiz", async (req, res) => {
       },
     });
 
-    console.log("OpenTDB API response:", {
-      response_code: apiResponse.data.response_code,
-      results_count: apiResponse.data.results?.length,
-    });
-
     if (apiResponse.data.response_code === 4) {
-      console.log("Token needs reset, attempting reset...");
       // Token has returned all possible questions, reset it
       const resetResponse = await axios.get(
         `https://opentdb.com/api_token.php?command=reset&token=${sessionToken}`
       );
-      console.log("Token reset response:", resetResponse.data);
 
       if (resetResponse.data.response_code === 0) {
         // Retry the request with the reset token
@@ -116,10 +108,6 @@ app.post("/api/quiz", async (req, res) => {
             type: "multiple",
             token: sessionToken,
           },
-        });
-        console.log("Retry response:", {
-          response_code: retryResponse.data.response_code,
-          results_count: retryResponse.data.results?.length,
         });
 
         if (retryResponse.data.response_code === 0) {
@@ -146,29 +134,25 @@ app.post("/api/quiz", async (req, res) => {
       throw new Error("No questions returned from API");
     }
 
-    // Create a new quiz document without revealing answers
-    const questions: QuizQuestion[] = apiResponse.data.results.map(
-      (q: any) => ({
-        category: q.category,
-        type: q.type,
-        difficulty: q.difficulty,
-        question: q.question,
-        correct_answer: q.correct_answer,
-        incorrect_answers: q.incorrect_answers,
-      })
-    );
+    // Create a new quiz document
+    const questions = apiResponse.data.results.map((q: any) => ({
+      category: q.category,
+      type: q.type,
+      difficulty: q.difficulty,
+      question: q.question,
+      correct_answer: q.correct_answer,
+      incorrect_answers: q.incorrect_answers,
+    }));
 
     const quiz = new Quiz({
       questions,
       userId: req.body.userId || "anonymous",
       submitted: false,
-    }) as QuizDocument;
+    });
 
     await quiz.save();
-    console.log("Quiz saved to MongoDB:", quiz._id);
 
-    // Return questions with all answers
-    const quizResponse: QuizResponse = {
+    const quizResponse = {
       quizId: quiz._id.toString(),
       questions: questions,
     };
@@ -189,7 +173,7 @@ app.post("/api/quiz/:quizId/submit", async (req, res) => {
   const { answers } = req.body;
 
   try {
-    const quiz = (await Quiz.findById(quizId)) as QuizDocument | null;
+    const quiz = await Quiz.findById(quizId);
     if (!quiz) {
       return res.status(404).json({ error: "Quiz not found" });
     }
@@ -205,7 +189,7 @@ app.post("/api/quiz/:quizId/submit", async (req, res) => {
     quiz.submitted = true;
     await quiz.save();
 
-    const submission: QuizSubmission = {
+    const submission = {
       score,
       totalQuestions: quiz.questions.length,
       questions: quiz.questions.map((q, index) => ({
@@ -222,11 +206,9 @@ app.post("/api/quiz/:quizId/submit", async (req, res) => {
   }
 });
 
-// Add health check endpoint
+// Health check endpoint
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
+export default app;
